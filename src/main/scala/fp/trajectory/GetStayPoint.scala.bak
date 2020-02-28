@@ -1,0 +1,139 @@
+package fp
+
+import fp.util.MyUtil
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.mllib.linalg.Vectors
+import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
+
+object GetStayPoint {
+  def main(args: Array[String]): Unit = {
+    // 删除输出目录
+    val path = new Path("output1")
+    val hdfs = FileSystem.get(new Configuration())
+    if(hdfs.exists(path)) {
+      hdfs.delete(path, true)
+    }
+
+    // Spark配置
+    val conf = new SparkConf()
+    conf.setMaster("local[*]")
+    conf.setAppName("MiningTrajectoryData")
+    conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+
+    val sc = new SparkContext(conf)
+
+    // 从文件中读取用户轨迹数据
+    val trajectoryRDD :RDD[String] = sc.textFile(args(0))
+
+    // 将轨迹数据转化为停留点数据
+    val stayPointsTrajectoryRDD :RDD[String] = trajectoryRDD.map(trajectory=> {
+      val stayPoints :StringBuffer = new StringBuffer()
+      val trajectoryData = trajectory.split("\t")
+      val userId = trajectoryData(0)
+      val points = trajectoryData(1).split("->")
+      var (i,j) = (0, 1)
+      var (latSum,lonSum :Double) = (points(0).split(",")(0).toDouble, points(0).split(",")(1).toDouble)
+
+//      // 该方法较慢，使用下面的优化代码
+//      while(i < points.length && j < points.length) {
+//        var tokens1 = points(i).split(",") // tokens1(0)：纬度  tokens1(1)：经度  tokens1(2)：时间
+//        val tokens2 = points(j).split(",")
+//        val d = MyUtil.GetDistance(tokens1(0).toDouble, tokens1(1).toDouble, tokens2(0).toDouble, tokens2(1).toDouble) // 两点之间的距离（m）
+//        val t = MyUtil.getBetweenSeconds(tokens1(2), tokens2(2)) // 两点之间的时间差值（s）
+//        latSum += tokens2(0).toDouble
+//        lonSum += tokens2(1).toDouble
+//        if(t >= Config.TIME_THRESH && d <= Config.DISTANCE_THRESH) { // p(i)->...->p(j)满足停留区域的条件
+//          var isStayPoints = false
+//          if(j+1 < points.length) {
+//            val tokens3 = points(j+1).split(",")
+//            if(MyUtil.GetDistance(tokens1(0).toDouble, tokens1(1).toDouble, tokens3(0).toDouble, tokens3(1).toDouble) > Config.DISTANCE_THRESH) {
+//              isStayPoints = true
+//            } else { // 虽然满足停留区域的条件，但不是最长的停留轨迹
+//              j += 1
+//            }
+//          } else { // j已经是最后一个轨迹点
+//            isStayPoints = true
+//          }
+//          if(isStayPoints && j-i > 0) {
+//            // p(i)->...->p(j) 之间的轨迹满足停留点的条件, 停留点保存 平均纬度,平均经度,到达时间,离开时间 信息
+//            stayPoints.append(latSum/(j-i+1) + "," + lonSum/(j-i+1) + "," + tokens1(2) + "," + tokens2(2)).append("->")
+//            // 计算下一个停留区域
+//            i = j+1
+//            j = i+1
+//            if(i < points.length) {
+//              latSum = points(i).split(",")(0).toDouble
+//              lonSum = points(i).split(",")(1).toDouble
+//            }
+//          }
+//        } else if(d > Config.DISTANCE_THRESH) {
+//          // 距离超过阈值，说明轨迹 p(i)->...->p(j) 不是停留区域，说明 p(i)->...->p(j-1) 的任何连续子集都不是停留点
+//          // 因为当算p(i)和p(j)的距离时且它们之间的距离大于阈值，说明 p(i)->...->p(j-1) 的时间阈值未到，那么它们任何连续子集都不是停留点
+//          // 那么如果 p[k](i<k<j)->...->p[j]属于某个停留点的一部分，必须有p(k)和p(j)之间的距离小于阈值，我们以此条件去查找下一个停留点
+//          // 下面找到一个停留点新的起点
+//          do{
+//            i += 1
+//            tokens1 = points(i).split(",")
+//          } while(i < j && MyUtil.GetDistance(tokens1(0).toDouble, tokens1(1).toDouble, tokens2(0).toDouble, tokens2(1).toDouble) > Config.DISTANCE_THRESH)
+//          j = i+1
+//          latSum = points(i).split(",")(0).toDouble
+//          lonSum = points(i).split(",")(1).toDouble
+//        } else {
+//          // 若时间阈值未到，则继续判断下一个轨迹点
+//          j += 1
+//        }
+//      } //找到17391个停留点，运行大约18分钟
+
+      // 优化停留点计算速度
+      while(i < points.length && j < points.length) {
+        var tokens1 = points(i).split(",") // tokens1(0):经度 tokens1(1):纬度  tokens1(2):记录轨迹点的时间
+        var tokens2 = points(j).split(",")
+        latSum += tokens2(0).toDouble
+        lonSum += tokens2(1).toDouble
+        while(j < points.length && MyUtil.GetDistance(tokens1(0).toDouble, tokens1(1).toDouble, tokens2(0).toDouble, tokens2(1).toDouble) <= Config.DISTANCE_THRESH) {
+          j += 1
+          if(j < points.length) {
+            tokens2 = points(j).split(",")
+            latSum += tokens2(0).toDouble
+            lonSum += tokens2(1).toDouble
+          }
+        }
+        // p(i)->..-.->p(j-1) 可能是停留点，还要判断时间阈值
+        if(j-i > 1 && MyUtil.getBetweenSeconds(tokens1(2), points(j-1).split(",")(2)) >= Config.TIME_THRESH) {
+          // 从 p(i)->...->p(j-1) 是停留点
+          if(j < points.length) {
+            // j未出界，经纬度和应减去j的经纬度
+            latSum -= tokens2(0).toDouble
+            lonSum -= tokens2(1).toDouble
+          }
+          stayPoints.append(latSum/(j-i) + "," + lonSum/(j-i) + "," + tokens1(2) + "," + points(j-1).split(",")(2)).append("->")
+          i = j
+          j = i+1
+          latSum = tokens2(0).toDouble
+          lonSum = tokens2(1).toDouble
+        } else {
+          do{
+            i += 1
+            if(i < points.length) tokens1 = points(i).split(",")
+          } while(i < j && MyUtil.GetDistance(tokens1(0).toDouble, tokens1(1).toDouble, tokens2(0).toDouble, tokens2(1).toDouble) > Config.DISTANCE_THRESH)
+          j=i+1;
+          latSum = tokens1(0).toDouble
+          lonSum = tokens1(1).toDouble
+        }
+      } // 找到17391个停留点，运行大约4分30秒
+
+      if(stayPoints.length() > 0) {
+        // 在停留点序列前面标上用户名
+        stayPoints.insert(0, userId+"\t")
+        // 去除最后多余的 -> 符号
+        stayPoints.replace(stayPoints.length()-2, stayPoints.length(), "")
+      }
+      stayPoints.toString
+    }).filter(_.length() > 0).cache()
+    stayPointsTrajectoryRDD.saveAsTextFile(args(1))
+
+    sc.stop()
+  }
+
+}

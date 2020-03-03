@@ -35,7 +35,7 @@ object Main {
 
     // 创建spark配置
     val conf = new SparkConf()
-//    conf.setMaster("local[*]")
+//    conf.setMaster("local[2]")
     conf.setAppName("MiningTrajectoryData")
     conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
     val sc = new SparkContext(conf)
@@ -53,7 +53,7 @@ object Main {
     // 3.使用DBSCAN算法将停留点进行聚类，并为每个停留点标记簇号
     val parseDataRDD = stayPointsTrajectoryRDD.flatMap(_.split("\t")(1).split("->")).map(
       p=>(p.split(",")(0).toDouble, p.split(",")(1).toDouble)).cache()
-    val model = dbscan.DBSCANSpark.train(parseDataRDD, Config.ESP, Config.MIN_POINTS, Config.MAX_POINTS_PER_PARTITION)
+    val model = dbscan.DBSCANSpark.train(parseDataRDD, Config.EPS, Config.MIN_POINTS, Config.MAX_POINTS_PER_PARTITION)
     model.labeledPoints.saveAsTextFile(args(2)+"/1_labeledPoints") // 保存标记好簇号的停留点
 
     // 4.将用户的停留点轨迹转化为位置轨迹

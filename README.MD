@@ -12,3 +12,5 @@
 ### 执行命令：
     spark-submit --master spark://master001:7077 --executor-memory 8g --total-executor-cores 20 --class fp.Main MPFinalProject.jar Data Trajectory output_fp
 其中输入为Data目录下的轨迹文件，Trajectory目录为预处理轨迹数据后的保存目录，output_fp保存最后的处理结果
+
+原始轨迹文件下载网址：https://www.microsoft.com/en-us/download/details.aspx?id=52367
